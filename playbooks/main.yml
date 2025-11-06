@@ -1,0 +1,104 @@
+---
+- name: Setup web server with NGINX
+  hosts: webserver
+  become: yes
+
+  vars:
+    web_root: /opt/static-sites
+    web_user: webapp
+
+  tasks:
+    - name: Update and install packages
+      apt:
+        name:
+          - nginx
+          - ufw
+          - fail2ban
+          - unattended-upgrades
+        state: present
+        update_cache: yes
+
+    - name: Create web user
+      user:
+        name: "{{ web_user }}"
+        create_home: no
+        shell: /usr/sbin/nologin
+
+    - name: Create web root directory
+      file:
+        path: "{{ web_root }}"
+        state: directory
+        owner: "{{ web_user }}"
+        group: "{{ web_user }}"
+        mode: '0755'
+
+    - name: Deploy index.html from template
+      template:
+        src: ../roles/templates/index.html.j2
+        dest: "{{ web_root }}/index.html"
+        owner: "{{ web_user }}"
+        group: "{{ web_user }}"
+        mode: '0644'
+
+    - name: Configure NGINX
+      template:
+        src: ../roles/templates/nginx.conf.j2
+        dest: /etc/nginx/sites-available/default
+      notify: Restart nginx
+
+    - name: Enable UFW and allow ports 22 and 80
+      ufw:
+        rule: allow
+        port: "{{ item }}"
+      loop:
+        - 22
+        - 80
+
+    - name: Deny all other incoming traffic
+      ufw:
+        state: enabled
+        policy: deny
+        direction: incoming
+
+    - name: Disable root SSH login
+      lineinfile:
+        path: /etc/ssh/sshd_config
+        regexp: '^PermitRootLogin'
+        line: 'PermitRootLogin no'
+
+    - name: Ensure SSH key login only
+      lineinfile:
+        path: /etc/ssh/sshd_config
+        regexp: '^PasswordAuthentication'
+        line: 'PasswordAuthentication no'
+
+    - name: Restart SSH
+      service:
+        name: ssh
+        state: restarted
+
+    - name: Enable unattended-upgrades
+      command: dpkg-reconfigure -f noninteractive unattended-upgrades
+
+    - name: Ensure fail2ban is running
+      service:
+        name: fail2ban
+        state: started
+        enabled: yes
+
+    - name: Validate HTTP response
+      uri:
+        url: http://localhost
+        return_content: yes
+      register: webpage
+
+    - name: Check webpage contains Welcome
+      assert:
+        that:
+          - "'Vitej' in webpage.content"
+
+  handlers:
+    - name: Restart nginx
+      service:
+        name: nginx
+        state: restarted
